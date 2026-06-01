@@ -1,0 +1,54 @@
+# ── GoalFlow Spring Boot Configuration ──────────────────────────────────────
+
+spring:
+  application:
+    name: goalflow-backend
+
+  # MySQL DataSource
+  datasource:
+    url: jdbc:mysql://localhost:3306/goalflow_db?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8
+    username: root
+    password: akila2004   # ← change this
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+
+  # JPA / Hibernate
+  jpa:
+    hibernate:
+      ddl-auto: create         # use 'create' first run, then 'validate'
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+
+  # SQL init (runs schema.sql on startup)
+  sql:
+    init:
+      mode: always                # set to 'always' only on first run
+
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+# JWT
+goalflow:
+  jwt:
+    secret: goalflow-super-secret-key-change-before-production-deployment-2024
+    expiry-ms: 86400000           # 24 hours
+
+# CORS — tighten to your frontend URL in production
+spring.web.cors:
+  allowed-origins: "*"
+  allowed-methods: GET,POST,PUT,PATCH,DELETE,OPTIONS
+  allowed-headers: "*"
+
+# Logging
+logging:
+  level:
+    com.goalflow: DEBUG
+    org.springframework.web.socket: INFO
