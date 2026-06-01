@@ -1,8 +1,8 @@
-# ── GoalFlow Spring Boot Configuration ──────────────────────────────────────
+# ── GoalFlow Spring Boot Configuration ────────────────────────────────────
 
 spring:
   application:
-    name: goalflow-backend
+    name: goalflow-backend──
 
   # MySQL DataSource
   datasource:
