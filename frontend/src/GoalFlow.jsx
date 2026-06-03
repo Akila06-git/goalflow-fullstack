@@ -43,6 +43,21 @@ let DB = {
     { id: 5, userId: 1, goalId: 4, text: "Read 30 pages",           done: false, date: new Date().toDateString() },
   ],
   activity: [],
+  productivity: (() => {
+    const data = {};
+    const now = new Date();
+    for (let i = 60; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      const key = d.toDateString();
+      const tasksTotal = Math.floor(Math.random() * 5) + 1;
+      const tasksDone = i === 0 ? 2 : Math.floor(Math.random() * (tasksTotal + 1));
+      if (tasksDone > 0 || Math.random() > 0.3) {
+        data[key] = { tasksTotal, tasksDone, xpEarned: tasksDone * 50, goalsWorked: Math.min(tasksDone, Math.floor(Math.random() * 3) + 1) };
+      }
+    }
+    return { 1: data };
+  })(),
   nextGoalId: 7,
   nextTaskId: 6,
 };
@@ -109,6 +124,12 @@ const API = {
     res({ success: true });
   }, API_DELAY())),
   getOnlineUsers: () => new Promise(res => setTimeout(() => res(DB.users.map(u => ({id: u.id, name: u.name, avatar: u.avatar, level: u.level}))), 100)),
+  getProductivity: (userId) => new Promise(res => setTimeout(() => res(DB.productivity[userId] || {}), 50)),
+  logProductivity: (userId, dateKey, data) => new Promise(res => setTimeout(() => {
+    if (!DB.productivity[userId]) DB.productivity[userId] = {};
+    DB.productivity[userId][dateKey] = { ...DB.productivity[userId][dateKey], ...data };
+    res(DB.productivity[userId][dateKey]);
+  }, 50)),
 };
 
 // ─── Reusable UI Components ──────────────────────────────────────────────────
@@ -136,6 +157,21 @@ const css = `
   .shimmer{background:linear-gradient(90deg,${C.primaryLight} 25%,#fff 50%,${C.primaryLight} 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;}
   @media(max-width:640px){.hide-mobile{display:none!important;}}
   @media(min-width:641px){.show-mobile{display:none!important;}}
+  @media(min-width:900px){.hide-desktop-sidebar{display:none!important;}}
+  @media(max-width:899px){.desktop-sidebar{display:none!important;}}
+  @media(min-width:900px){
+    .app-layout{display:flex;min-height:100vh;}
+    .desktop-sidebar{width:240px;min-height:100vh;position:fixed;left:0;top:0;background:rgba(255,255,255,0.97);border-right:1px solid ${C.border};display:flex;flex-direction:column;padding:28px 16px 24px;gap:6px;backdrop-filter:blur(16px);z-index:100;box-shadow:2px 0 20px rgba(124,58,237,0.07);}
+    .sidebar-logo{display:flex;align-items:center;gap:12px;padding:0 8px 24px;border-bottom:1px solid ${C.border};margin-bottom:10px;}
+    .sidebar-logo-icon{width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,${C.primary},${C.primaryDark});display:flex;align-items:center;justify-content:center;font-size:24px;box-shadow:0 4px 16px rgba(124,58,237,0.3);}
+    .sidebar-nav-btn{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:14px;font-size:14px;font-weight:600;color:${C.muted};transition:all 0.2s;width:100%;text-align:left;border:none;background:none;cursor:pointer;}
+    .sidebar-nav-btn:hover{background:${C.primaryLight};color:${C.primary};}
+    .sidebar-nav-btn.active{background:${C.primaryLight};color:${C.primary};}
+    .sidebar-nav-btn .nav-icon{font-size:20px;width:28px;text-align:center;}
+    .main-content{margin-left:240px;flex:1;min-height:100vh;padding-bottom:0!important;display:flex;justify-content:center;}
+    .main-content > div{padding-bottom:24px!important;width:100%;max-width:800px;padding-left:32px;padding-right:32px;}
+    .mobile-bottom-nav{display:none!important;}
+  }
 `;
 
 function Spinner({ size = 20 }) {
@@ -731,17 +767,327 @@ function ProfilePage({ user, goals, tasks, onLogout }) {
   );
 }
 
+
+// ─── Calendar Page ────────────────────────────────────────────────────────────
+
+function CalendarPage({ user, goals, tasks }) {
+  const today = new Date();
+  const [viewDate, setViewDate] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [productivity, setProductivity] = useState({});
+  const [selectedDay, setSelectedDay] = useState(null);
+
+  useEffect(() => {
+    API.getProductivity(user.id).then(setProductivity);
+  }, [user.id]);
+
+  // Sync today's task data into productivity
+  useEffect(() => {
+    const key = today.toDateString();
+    const todayTasks = tasks.filter(t => t.date === key || t.date === new Date().toDateString());
+    const done = tasks.filter(t => t.done && (t.date === key || t.date === new Date().toDateString())).length;
+    if (todayTasks.length > 0) {
+      API.logProductivity(user.id, key, {
+        tasksTotal: todayTasks.length,
+        tasksDone: done,
+        xpEarned: done * 50,
+        goalsWorked: [...new Set(todayTasks.map(t => t.goalId))].length,
+      }).then(d => setProductivity(prev => ({ ...prev, [key]: d })));
+    }
+  }, [tasks, user.id]);
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const monthName = viewDate.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+  const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
+
+  // Month stats
+  const monthKeys = [];
+  for (let d = 1; d <= daysInMonth; d++) {
+    monthKeys.push(new Date(year, month, d).toDateString());
+  }
+  const monthData = monthKeys.map(k => productivity[k]).filter(Boolean);
+  const totalTasksDone = monthData.reduce((s, d) => s + (d.tasksDone || 0), 0);
+  const totalXP = monthData.reduce((s, d) => s + (d.xpEarned || 0), 0);
+  const activeDays = monthData.filter(d => (d.tasksDone || 0) > 0).length;
+  const avgScore = activeDays > 0 ? Math.round(monthData.reduce((s, d) => s + Math.round(((d.tasksDone || 0) / Math.max(d.tasksTotal || 1, 1)) * 100), 0) / activeDays) : 0;
+
+  function getDayScore(dateStr) {
+    const d = productivity[dateStr];
+    if (!d || !d.tasksTotal) return null;
+    return Math.round(((d.tasksDone || 0) / d.tasksTotal) * 100);
+  }
+
+  function getDayColor(score) {
+    if (score === null) return "transparent";
+    if (score === 0) return "#FEE2E2";
+    if (score < 40) return "#FDE68A";
+    if (score < 70) return "#A7F3D0";
+    if (score < 90) return "#6EE7B7";
+    return "#059669";
+  }
+
+  function getDayTextColor(score) {
+    if (score === null) return C.muted;
+    if (score >= 90) return "#fff";
+    return C.text;
+  }
+
+  const selectedData = selectedDay ? productivity[selectedDay] : null;
+  const selectedScore = selectedDay ? getDayScore(selectedDay) : null;
+  const selectedDate = selectedDay ? new Date(selectedDay) : null;
+
+  // Weekly breakdown
+  const weeks = [];
+  let week = new Array(firstDay).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    week.push(d);
+    if (week.length === 7) { weeks.push(week); week = []; }
+  }
+  if (week.length) { while (week.length < 7) week.push(null); weeks.push(week); }
+
+  const weekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const bestStreak = (() => {
+    let best = 0, cur = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const key = new Date(year, month, d).toDateString();
+      const score = getDayScore(key);
+      if (score !== null && score > 0) { cur++; best = Math.max(best, cur); } else cur = 0;
+    }
+    return best;
+  })();
+
+  return (
+    <div className="fade-in" style={{ padding: "0 0 96px" }}>
+      {/* Header */}
+      <div style={{ background: `linear-gradient(135deg, ${C.primary} 0%, #4F46E5 100%)`, padding: "28px 20px 44px", borderRadius: "0 0 36px 36px", color: "#fff", marginBottom: -24 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <div>
+            <h2 style={{ fontSize: 20, fontWeight: 800, letterSpacing: -0.5 }}>📅 Monthly Calendar</h2>
+            <p style={{ opacity: 0.8, fontSize: 13, marginTop: 2 }}>Track your productivity journey</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button onClick={prevMonth} style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(255,255,255,0.2)", color: "#fff", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", border: "none", cursor: "pointer" }}>‹</button>
+            <span style={{ fontSize: 13, fontWeight: 700, minWidth: 100, textAlign: "center" }}>{monthName}</span>
+            <button onClick={nextMonth} style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(255,255,255,0.2)", color: "#fff", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", border: "none", cursor: "pointer" }}>›</button>
+          </div>
+        </div>
+        {/* Month summary pills */}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {[
+            { icon: "✅", label: "Tasks Done", val: totalTasksDone },
+            { icon: "🔥", label: "Active Days", val: activeDays },
+            { icon: "⚡", label: "XP Earned", val: totalXP },
+            { icon: "📈", label: "Avg Score", val: `${avgScore}%` },
+          ].map(s => (
+            <div key={s.label} style={{ background: "rgba(255,255,255,0.15)", borderRadius: 12, padding: "8px 12px", backdropFilter: "blur(8px)", flex: 1, minWidth: 70, textAlign: "center" }}>
+              <div style={{ fontSize: 16 }}>{s.icon}</div>
+              <div style={{ fontWeight: 800, fontSize: 15 }}>{s.val}</div>
+              <div style={{ fontSize: 9, opacity: 0.8, fontWeight: 600, marginTop: 1 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ padding: "0 16px", position: "relative", zIndex: 1 }}>
+        {/* Calendar Grid */}
+        <div style={{ background: C.surface, borderRadius: 24, padding: "20px 16px", boxShadow: "0 4px 24px rgba(124,58,237,0.10)", border: `1px solid ${C.border}`, marginBottom: 14 }}>
+          {/* Weekday headers */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 8 }}>
+            {weekdays.map(d => (
+              <div key={d} style={{ textAlign: "center", fontSize: 10, fontWeight: 800, color: C.muted, padding: "4px 0", letterSpacing: 0.5 }}>{d}</div>
+            ))}
+          </div>
+          {/* Day cells */}
+          {weeks.map((wk, wi) => (
+            <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 4, marginBottom: 4 }}>
+              {wk.map((day, di) => {
+                if (!day) return <div key={di} />;
+                const dateStr = new Date(year, month, day).toDateString();
+                const score = getDayScore(dateStr);
+                const isToday = dateStr === today.toDateString();
+                const isFuture = new Date(year, month, day) > today;
+                const isSelected = selectedDay === dateStr;
+                const data = productivity[dateStr];
+                return (
+                  <div
+                    key={di}
+                    onClick={() => !isFuture && setSelectedDay(isSelected ? null : dateStr)}
+                    style={{
+                      aspectRatio: "1",
+                      borderRadius: 10,
+                      background: isSelected ? C.primary : getDayColor(score),
+                      border: isToday ? `2.5px solid ${C.primary}` : isSelected ? "none" : `1.5px solid ${score !== null ? "transparent" : C.border}`,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      cursor: isFuture ? "default" : "pointer",
+                      opacity: isFuture ? 0.3 : 1,
+                      transition: "all 0.15s",
+                      position: "relative",
+                      gap: 1,
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontWeight: isToday ? 800 : 600, color: isSelected ? "#fff" : getDayTextColor(score), lineHeight: 1 }}>{day}</span>
+                    {score !== null && !isFuture && (
+                      <span style={{ fontSize: 7, fontWeight: 700, color: isSelected ? "rgba(255,255,255,0.85)" : score >= 90 ? "#fff" : C.primary, lineHeight: 1 }}>{score}%</span>
+                    )}
+                    {data && data.tasksTotal > 0 && !isFuture && score === null && (
+                      <div style={{ width: 4, height: 4, borderRadius: "50%", background: C.border }} />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          {/* Legend */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 14, flexWrap: "wrap", justifyContent: "center" }}>
+            <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Productivity:</span>
+            {[["#FEE2E2","0%"],["#FDE68A","1-39%"],["#A7F3D0","40-69%"],["#6EE7B7","70-89%"],["#059669","90%+"]].map(([bg, label]) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 3 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: bg, border: `1px solid ${C.border}` }} />
+                <span style={{ fontSize: 9, color: C.muted, fontWeight: 600 }}>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Selected Day Detail */}
+        {selectedDay && (
+          <div className="fade-in" style={{ background: C.surface, borderRadius: 20, padding: "16px", border: `1.5px solid ${C.primary}`, marginBottom: 14, boxShadow: `0 4px 20px rgba(124,58,237,0.15)` }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <p style={{ fontWeight: 800, fontSize: 15, color: C.primary }}>
+                {selectedDate?.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric" })}
+              </p>
+              <button onClick={() => setSelectedDay(null)} style={{ width: 26, height: 26, borderRadius: "50%", background: C.primaryLight, color: C.primary, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, border: "none", cursor: "pointer" }}>×</button>
+            </div>
+            {selectedData ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10 }}>
+                {[
+                  { icon: "✅", label: "Tasks Done", val: `${selectedData.tasksDone}/${selectedData.tasksTotal}` },
+                  { icon: "📊", label: "Score", val: `${selectedScore}%` },
+                  { icon: "⚡", label: "XP Earned", val: selectedData.xpEarned },
+                  { icon: "🎯", label: "Goals Worked", val: selectedData.goalsWorked },
+                ].map(s => (
+                  <div key={s.label} style={{ background: C.bg, borderRadius: 14, padding: "12px 10px", textAlign: "center" }}>
+                    <div style={{ fontSize: 20 }}>{s.icon}</div>
+                    <div style={{ fontWeight: 800, fontSize: 18, color: C.primary }}>{s.val}</div>
+                    <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, marginTop: 2 }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ textAlign: "center", padding: "16px 0", color: C.muted, fontSize: 13 }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>💤</div>
+                No activity recorded this day
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Monthly Insights */}
+        <div style={{ background: C.surface, borderRadius: 20, padding: "16px", border: `1px solid ${C.border}`, marginBottom: 14 }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>🔍 Monthly Insights</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: 10 }}>
+            {[
+              { icon: "🔥", label: "Best Streak", val: `${bestStreak} days`, color: "#EF4444" },
+              { icon: "💪", label: "Active Days", val: `${activeDays}/${daysInMonth}`, color: C.success },
+              { icon: "📅", label: "Completion", val: `${daysInMonth > 0 ? Math.round((activeDays / Math.min(today.getDate(), daysInMonth)) * 100) : 0}%`, color: C.primary },
+              { icon: "🌟", label: "Total XP", val: totalXP, color: C.accent },
+            ].map(s => (
+              <div key={s.label} style={{ background: C.bg, borderRadius: 16, padding: "14px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: `${s.color}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, flexShrink: 0 }}>{s.icon}</div>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 16, color: s.color }}>{s.val}</div>
+                  <div style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>{s.label}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Weekly bars */}
+        <div style={{ background: C.surface, borderRadius: 20, padding: "16px", border: `1px solid ${C.border}`, marginBottom: 14 }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📊 Weekly Breakdown</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {weeks.map((wk, wi) => {
+              const wkDays = wk.filter(Boolean);
+              if (!wkDays.length) return null;
+              const wkData = wkDays.map(d => productivity[new Date(year, month, d).toDateString()]).filter(Boolean);
+              const wkDone = wkData.reduce((s, d) => s + (d.tasksDone || 0), 0);
+              const wkTotal = wkData.reduce((s, d) => s + (d.tasksTotal || 0), 0);
+              const wkPct = wkTotal > 0 ? Math.round((wkDone / wkTotal) * 100) : 0;
+              const wkLabel = `Week ${wi + 1} (${new Date(year, month, wkDays[0]).toLocaleDateString("en-US",{month:"short",day:"numeric"})} – ${new Date(year, month, wkDays[wkDays.length-1]).toLocaleDateString("en-US",{day:"numeric"})})`;
+              return (
+                <div key={wi}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 5 }}>
+                    <span>{wkLabel}</span>
+                    <span style={{ color: wkPct >= 70 ? C.success : wkPct >= 40 ? C.accent : C.danger, fontWeight: 700 }}>{wkPct}%</span>
+                  </div>
+                  <div style={{ background: C.primaryLight, borderRadius: 8, height: 10, overflow: "hidden" }}>
+                    <div style={{ width: `${wkPct}%`, height: "100%", background: wkPct >= 70 ? C.success : wkPct >= 40 ? C.accent : C.danger, borderRadius: 8, transition: "width 0.8s ease" }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Monthly Productivity Bar Chart */}
+        <div style={{ background: C.surface, borderRadius: 20, padding: "16px", border: `1px solid ${C.border}`, marginBottom: 14 }}>
+          <p style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>📈 Month Productivity</p>
+          <p style={{ fontSize: 11, color: C.muted, marginBottom: 14 }}>Daily task completion rate — {monthName}</p>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 3, height: 80, overflowX: "auto", paddingBottom: 4 }}>
+            {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(d => {
+              const dateStr = new Date(year, month, d).toDateString();
+              const score = getDayScore(dateStr);
+              const isFuture = new Date(year, month, d) > new Date();
+              const isToday = dateStr === new Date().toDateString();
+              const barH = score !== null ? Math.max(6, score * 0.74) : 4;
+              const barColor = score === null ? C.border : score >= 90 ? C.success : score >= 60 ? C.primary : score >= 30 ? C.accent : C.danger;
+              return (
+                <div key={d} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, flex: "1 0 auto", minWidth: 14 }}>
+                  <div style={{ width: "100%", maxWidth: 18, height: barH, borderRadius: 4, background: isFuture ? C.primaryLight : barColor, transition: "height 0.6s ease", outline: isToday ? `2px solid ${C.primary}` : "none" }} title={score !== null ? `Day ${d}: ${score}%` : `Day ${d}: No data`} />
+                  {(d === 1 || d % 5 === 0 || d === daysInMonth) && (
+                    <span style={{ fontSize: 8, color: C.muted, fontWeight: 600 }}>{d}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+            {[["#059669","90%+"],["#7C3AED","60-89%"],["#F59E0B","30-59%"],["#DC2626","<30%"]].map(([color, label]) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 3, background: color }} />
+                <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Bottom Navigation ────────────────────────────────────────────────────────
 
 function BottomNav({ page, setPage }) {
   const tabs = [
     { id: "home", icon: "🏠", label: "Home" },
     { id: "goals", icon: "🎯", label: "Goals" },
+    { id: "calendar", icon: "📅", label: "Calendar" },
     { id: "community", icon: "🌍", label: "Community" },
     { id: "profile", icon: "👤", label: "Profile" },
   ];
   return (
-    <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 520, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(16px)", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-around", padding: "8px 0 max(12px, env(safe-area-inset-bottom))", zIndex: 1000, boxShadow: "0 -4px 24px rgba(124,58,237,0.10)" }}>
+    <div className="mobile-bottom-nav" style={{ position: "fixed", bottom: 0, left: 0, width: "100%", background: "rgba(255,255,255,0.97)", backdropFilter: "blur(16px)", borderTop: `1px solid ${C.border}`, display: "flex", justifyContent: "space-around", padding: "8px 0 max(12px, env(safe-area-inset-bottom))", zIndex: 1000, boxShadow: "0 -4px 24px rgba(124,58,237,0.10)" }}>
       {tabs.map(t => (
         <button key={t.id} onClick={() => setPage(t.id)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "4px 18px", background: "none", border: "none", position: "relative" }}>
           <span style={{ fontSize: 22, filter: page===t.id ? "none" : "grayscale(0.7) opacity(0.55)", transform: page===t.id ? "translateY(-2px) scale(1.12)" : "none", transition: "all 0.2s" }}>{t.icon}</span>
@@ -755,7 +1101,7 @@ function BottomNav({ page, setPage }) {
 
 // ─── Real-Time Indicator ──────────────────────────────────────────────────────
 
-function RTIndicator() {
+function RTIndicator({ inline = false }) {
   const [ping, setPing] = useState(false);
   useEffect(() => {
     const unsub1 = subscribe("goal:added", () => setPing(true));
@@ -764,9 +1110,15 @@ function RTIndicator() {
     const t = setInterval(() => setPing(false), 1500);
     return () => { unsub1(); unsub2(); unsub3(); clearInterval(t); };
   }, []);
-  return (
-    <div style={{ position: "fixed", top: 12, right: 12, zIndex: 9000, display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.9)", borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: C.success, border: `1px solid ${C.border}`, boxShadow: "0 2px 12px rgba(0,0,0,0.08)" }}>
+  if (inline) return (
+    <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 700, color: C.success }}>
       <div style={{ width: 7, height: 7, borderRadius: "50%", background: ping ? "#F59E0B" : C.success, transition: "background 0.3s", boxShadow: ping ? `0 0 0 3px rgba(245,158,11,0.3)` : `0 0 0 2px rgba(5,150,105,0.2)` }} />
+      {ping ? "Syncing…" : "Live"}
+    </div>
+  );
+  return (
+    <div className="hide-desktop-sidebar" style={{ position: "fixed", top: 12, right: 12, zIndex: 9000, display: "flex", alignItems: "center", gap: 5, background: "rgba(255,255,255,0.9)", borderRadius: 20, padding: "4px 10px", fontSize: 11, fontWeight: 700, color: C.success, border: `1px solid ${C.border}`, boxShadow: "0 2px 12px rgba(0,0,0,0.08)" }}>
+      <div style={{ width: 7, height: 7, borderRadius: "50%", background: ping ? "#F59E0B" : C.success, transition: "background 0.3s", boxShadow: ping ? `0 0 0 0 rgba(245,158,11,0.3)` : `0 0 0 2px rgba(5,150,105,0.2)` }} />
       {ping ? "Syncing…" : "Live"}
     </div>
   );
@@ -870,25 +1222,57 @@ export default function App() {
     </>
   );
 
+  const tabs = [
+    { id: "home", icon: "🏠", label: "Home" },
+    { id: "goals", icon: "🎯", label: "Goals" },
+    { id: "calendar", icon: "📅", label: "Calendar" },
+    { id: "community", icon: "🌍", label: "Community" },
+    { id: "profile", icon: "👤", label: "Profile" },
+  ];
+
   return (
     <>
       <style>{css}</style>
-      <div style={{ maxWidth: 520, margin: "0 auto", background: C.bg, minHeight: "100vh", position: "relative", overflowX: "hidden" }}>
-        <RTIndicator />
-        {loadingData ? (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", flexDirection: "column", gap: 16 }}>
-            <Spinner size={36} />
-            <p style={{ color: C.muted, fontSize: 14 }}>Loading your goals…</p>
+      {/* Desktop Sidebar */}
+      <div className="desktop-sidebar">
+        <div className="sidebar-logo">
+          <div className="sidebar-logo-icon">🎯</div>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 17, color: C.text, letterSpacing: -0.5 }}>GoalFlow</div>
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 500 }}>Real-Time Tracker</div>
           </div>
-        ) : (
-          <>
-            {page === "home"      && <HomePage user={user} goals={goals} tasks={tasks} onToggleTask={handleToggleTask} onAddTask={handleAddTask} />}
-            {page === "goals"     && <GoalsPage goals={goals} onAddGoal={handleAddGoal} onUpdateGoal={handleUpdateGoal} onDeleteGoal={handleDeleteGoal} />}
-            {page === "community" && <CommunityPage user={user} />}
-            {page === "profile"   && <ProfilePage user={user} goals={goals} tasks={tasks} onLogout={handleLogout} />}
-          </>
-        )}
-        <BottomNav page={page} setPage={setPage} />
+        </div>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setPage(t.id)} className={`sidebar-nav-btn${page === t.id ? " active" : ""}`}>
+            <span className="nav-icon">{t.icon}</span>
+            {t.label}
+          </button>
+        ))}
+        <div style={{ marginTop: "auto", padding: "16px 8px 0", borderTop: `1px solid ${C.border}` }}>
+          <RTIndicator inline />
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="app-layout">
+        <div className="main-content" style={{ background: C.bg, minHeight: "100vh", position: "relative", overflowX: "hidden" }}>
+          <RTIndicator />
+          {loadingData ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", flexDirection: "column", gap: 16 }}>
+              <Spinner size={36} />
+              <p style={{ color: C.muted, fontSize: 14 }}>Loading your goals…</p>
+            </div>
+          ) : (
+            <>
+              {page === "home"      && <HomePage user={user} goals={goals} tasks={tasks} onToggleTask={handleToggleTask} onAddTask={handleAddTask} />}
+              {page === "goals"     && <GoalsPage goals={goals} onAddGoal={handleAddGoal} onUpdateGoal={handleUpdateGoal} onDeleteGoal={handleDeleteGoal} />}
+              {page === "calendar"  && <CalendarPage user={user} goals={goals} tasks={tasks} />}
+              {page === "community" && <CommunityPage user={user} />}
+              {page === "profile"   && <ProfilePage user={user} goals={goals} tasks={tasks} onLogout={handleLogout} />}
+            </>
+          )}
+          <BottomNav page={page} setPage={setPage} />
+        </div>
       </div>
       {toast && <Toast key={toast.key} msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
     </>
